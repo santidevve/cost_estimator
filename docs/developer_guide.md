@@ -1,83 +1,83 @@
-# Guía del Desarrollador - Cost Estimator System
+# Developer Guide - Cost Estimator System
 
-Este documento describe la arquitectura interna, el esquema de datos y el flujo de procesamiento de la aplicación.
+This document outlines the internal architecture, database schema, and core calculations of the application.
 
 ---
 
-## Arquitectura de la Aplicación
+## System Architecture
 
-La aplicación se estructura bajo un enfoque de desacoplamiento de servicios (Frontend PWA y API Backend):
+The application is structured as a decoupled client-server architecture:
 
 ```
 +---------------------------------------+
-|          Cliente React (PWA)          |
+|          React Client (PWA)           |
 +---------------------------------------+
                     |
-                    | Peticiones HTTP REST + JWT (Puerto 5000)
+                    | REST HTTP Requests + JWT (Port 5000)
                     v
 +---------------------------------------+
-|        Servidor Express (API)         |
+|         Express API (Backend)         |
 +---------------------------------------+
                     |
-                    | Conector PostgreSQL (pg Pool)
+                    | PostgreSQL Client (pg Pool via WebSockets)
                     v
 +---------------------------------------+
-|        Base de Datos PostgreSQL       |
+|       Neon Serverless Postgres        |
 +---------------------------------------+
 ```
 
 ---
 
-## Esquema de Base de Datos y Relaciones
+## Database Schema & Relations
 
-El sistema utiliza UUIDs generados en Node.js mediante `crypto.randomUUID()` para asegurar identificadores universales únicos. A continuación se detallan las tablas y su función:
+The system uses UUIDs generated in Node.js via `crypto.randomUUID()` to ensure unique identifiers across distributed nodes. The tables are structured as follows:
 
-1. **`users`**: Almacena las cuentas registradas. Las contraseñas se cifran mediante `bcryptjs`. Todas las demás tablas contienen una relación `user_id` para garantizar que la información de cada negocio sea completamente privada.
-2. **`ingredients`**: Catálogo de insumos básicos comprados en volumen (ej. Bulto de harina de 25kg a $450.00).
-3. **`recipes`**: Platillos de comida rápida ofrecidos en el menú (ej. Hamburguesa).
-4. **`recipe_ingredients`**: Tabla asociativa muchos-a-muchos que define qué ingredientes integran una receta, la porción y su unidad de medida.
-5. **`overheads`**: Gastos operativos mensuales o periódicos (ej. Sueldos, renta, luz).
-6. **`sales_forecasts`**: Guarda el volumen de ventas proyectado de cada receta para alimentar el simulador de ganancias netas.
-
----
-
-## Fórmulas de Costeo Clave
-
-### 1. Costo por Ingrediente Individual en una Receta
-Para calcular el costo de una porción específica (ej. 150 gramos de carne) proveniente de una compra a granel (ej. 10 kilogramos por $900), se normalizan ambas unidades a la misma escala física y se efectúa la proporción:
-
-$$\text{Costo Porción} = \text{Cantidad Utilizada (Base)} \times \left( \frac{\text{Precio de Compra}}{\text{Cantidad Comprada (Base)}} \right)$$
-
-Las equivalencias de conversión física se gestionan en `src/pages/helper.ts` (Frontend) y `src/controllers/recipeController.ts` (Backend) usando un mapa de conversión estático para peso (`g`, `kg`, `lb`, `oz`), volumen (`ml`, `l`, `oz_fl`, `gal`) y conteo directo (`unidad`).
-
-### 2. Costo Total de Alimentos (COGS) por Platillo
-Es la sumatoria del costo individual de todas sus porciones de ingredientes:
-
-$$\text{Costo Total Receta} = \sum (\text{Costo Porción}_i)$$
-
-### 3. Margen de Ganancia de Platillo
-El margen bruto monetario obtenido al vender una porción individual:
-
-$$\text{Margen Bruto} = \text{Precio de Venta} - \text{Costo Total Receta}$$
-
-### 4. Porcentaje de Costo de Comida Real
-Es la fracción del precio de venta que representa el costo de los insumos (se recomienda mantenerlo entre 28% y 32% para negocios de comida rápida):
-
-$$\text{Costo Real \%} = \left( \frac{\text{Costo Total Receta}}{\text{Precio de Venta}} \right) \times 100$$
-
-### 5. Precio de Venta Sugerido
-Basado en un Costo Objetivo (ej. 30%), sugiere a qué precio se debe vender el platillo:
-
-$$\text{Precio Sugerido} = \frac{\text{Costo Total Receta}}{\left( \frac{\text{Costo Objetivo \%}}{100} \right)}$$
-
-### 6. Simulación de Ganancia Neta Mensual
-Calcula la rentabilidad final del negocio restando los gastos fijos mensuales:
-
-$$\text{Ganancia Neta} = \left[ \sum (\text{Ventas Diarias Plato}_j \times \text{Margen Bruto}_j) \times 30 \right] - \text{Gasto Operativo Mensual}$$
+1. **`users`**: Contains registered user accounts. Passwords are encrypted with `bcryptjs`. Every other table has a `user_id` foreign key constraint to ensure data isolation.
+2. **`ingredients`**: Catalogue of bulk raw ingredients purchased from suppliers (e.g., 25kg bag of flour for $450.00).
+3. **`recipes`**: Menu items sold to the public (e.g., Hamburger, French Fries).
+4. **`recipe_ingredients`**: Many-to-many join table mapping ingredients to recipes, storing the exact portion size and measurement unit used.
+5. **`overheads`**: Fixed operational expenses normalized across days/months (e.g., Rent, staff wages, electricity).
+6. **`sales_forecasts`**: Stores projected daily sales volumes per recipe to feed the net profit simulation dashboard.
 
 ---
 
-## Seguridad y Autenticación
+## Core Costing Equations
 
-- **JWT (JSON Web Tokens)**: El controlador `authController.ts` firma un JWT que contiene `{ userId, email }` con vigencia de 30 días al registrarse o iniciar sesión.
-- **Middleware de Protección**: La función `authenticateToken` en `src/middleware/auth.ts` decodifica y verifica el token de la cabecera `Authorization: Bearer <token>`, inyectando el `user` en el objeto Request de Express para que los controladores filtren los datos por `user_id`.
+### 1. Individual Portion Cost
+To calculate the cost of a specific portion size (e.g., 150g of beef) from a bulk purchase (e.g., 10kg pack for $900), the units are normalized to a common base unit (grams for weight, milliliters for volume) and calculated as:
+
+$$\text{Portion Cost} = \text{Portion Quantity (Base)} \times \left( \frac{\text{Purchase Price}}{\text{Purchase Quantity (Base)}} \right)$$
+
+Unit scaling maps are stored in `src/pages/helper.ts` (Client) and `src/controllers/recipeController.ts` (Server) for weight (`g`, `kg`, `lb`, `oz`), volume (`ml`, `l`, `oz_fl`, `gal`), and count (`unidad`/`unit`).
+
+### 2. Recipe Total Food Cost (COGS)
+The sum of all portion costs for the ingredients that compile a menu item:
+
+$$\text{Recipe Cost} = \sum (\text{Portion Cost}_i)$$
+
+### 3. Gross Profit Margin
+The profit margin earned on a single plate sale before operational overheads are deducted:
+
+$$\text{Gross Profit} = \text{Selling Price} - \text{Recipe Cost}$$
+
+### 4. Actual Food Cost Percentage
+The fraction of the selling price occupied by ingredient costs (best practice for fast food is between 28% and 32%):
+
+$$\text{Actual Food Cost \%} = \left( \frac{\text{Recipe Cost}}{\text{Selling Price}} \right) \times 100$$
+
+### 5. Suggested Selling Price
+The recommended selling price calculated from a target food cost percentage (e.g., 30%):
+
+$$\text{Suggested Price} = \frac{\text{Recipe Cost}}{\left( \frac{\text{Target Food Cost \%}}{100} \right)}$$
+
+### 6. Monthly Net Profit Simulation
+Projects overall profitability by subtracting fixed operational costs from the monthly gross margin:
+
+$$\text{Net Profit} = \left[ \sum (\text{Daily Sales Volume}_j \times \text{Gross Profit}_j) \times 30 \right] - \text{Monthly Fixed Overhead}$$
+
+---
+
+## Security & Authentication
+
+- **JWT (JSON Web Tokens)**: Upon login or registration, `authController.ts` signs a JWT containing `{ userId, email }` valid for 30 days.
+- **Route Authorization**: The `authenticateToken` middleware in `src/middleware/auth.ts` intercepts and validates the token in the `Authorization: Bearer <token>` header, injecting the user identity context into the request object.
